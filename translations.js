@@ -41,6 +41,20 @@ const translations = {
         "pool_desc": "سوئمنگ پولز اور بیرونی علاقوں کی حفاظت اور خوبصورتی بڑھانے کے لیے کسٹم فائبر گلاس اور ٹینسل شیڈ کے حل۔",
         "industrial_roofing": "صنعتی چھت سازی اور شیڈ اسٹرکچرز",
         "industrial_desc": "فیکٹریوں، گوداموں اور صنعتی سہولیات کے لیے ہیوی ڈیوٹی فائبر گلاس چھت سازی کی شیٹس اور اسٹیل شیڈ اسٹرکچرز۔",
+        "cat_fiberglass_shades": "فائبر گلاس شیڈز",
+        "cat_fiberglass_shades_desc": "گھروں، دفاتر اور تجارتی جگہوں کے لیے اعلی معیار کے فائبر گلاس شیڈنگ حل — پائیدار، اسٹائلش اور موسم سے محفوظ۔",
+        "cat_house_door": "گھر کا دروازہ",
+        "cat_house_door_desc": "حفاظت، خوبصورتی اور دیرپا کارکردگی کے لیے پریمیم فائبر گلاس اور اسٹرکچرل گھریلو دروازے۔",
+        "cat_kanopis": "کینوپیز",
+        "cat_kanopis_desc": "داخلی راستوں، ووک ویز اور بیرونی علاقوں کے لیے کسٹم تعمیر شدہ کینوپی ڈھانچے — مضبوط اور خوبصورت۔",
+        "cat_other_working": "دیگر کام",
+        "cat_other_working_desc": "منفرد کلائنٹ کی ضروریات اور کسٹم پروجیکٹس کے لیے متنوع خصوصی فیبریکیشن اور اسٹرکچرل کام۔",
+        "cat_roof": "چھت",
+        "cat_roof_desc": "تمام قسم کی عمارتوں کے لیے پریمیم فائبر گلاس اور اسٹیل مواد سے پائیدار اور موسم سے محفوظ چھت سازی کے حل۔",
+        "cat_tensile_shades": "ٹینسل شیڈز",
+        "cat_tensile_shades_desc": "پارکنگ، باغات اور تجارتی علاقوں کے لیے جدید ٹینسل شیڈ ڈھانچے — مضبوط، اسٹائلش اور UV مزاحم۔",
+        "cat_windows": "کھڑکیاں",
+        "cat_windows_desc": "اعلی موصلیت، پائیداری اور جدید ڈیزائن پیش کرنے والے اعلی معیار کے فائبر گلاس اور PVC ونڈو حل۔",
         "video_portfolio": "ہمارا ویڈیو پورٹ فولیو",
         "portfolio_heading": "ہمارے پروجیکٹس کو ایکشن میں دیکھیں",
         "why_choose_us": "ہمیں کیوں منتخب کریں",
@@ -103,6 +117,9 @@ function changeLanguage(lang) {
 
     // Save preference
     localStorage.setItem('preferredLanguage', lang);
+
+    // Dispatch event for other scripts
+    document.dispatchEvent(new CustomEvent('languageChanged', { detail: { language: lang } }));
 }
 
 document.addEventListener('DOMContentLoaded', () => {

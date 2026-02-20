@@ -833,7 +833,7 @@ h3 {
     background-size: cover;
     background-position: center;
     color: white;
-    padding: 6rem 2rem;
+    padding: 50px 2rem 10px;
     text-align: center;
 }
 
@@ -849,7 +849,7 @@ h3 {
 }
 
 .gallery-section {
-    padding: 4rem 2rem;
+    padding: 20px 2rem 4rem;
     max-width: 1400px;
     margin: 0 auto;
     background: #fff;
@@ -1142,7 +1142,18 @@ body[dir="rtl"] .footer-col h3,
 body[dir="rtl"] .footer-col p,
 body[dir="rtl"] .gallery-header h1,
 body[dir="rtl"] .gallery-header p {
-    text-align: right;
+    text-align: center;
+    display: inline-block;
+    margin-bottom: 0;
+    vertical-align: baseline;
+}
+
+body[dir="rtl"] .gallery-header {
+    display: flex;
+    justify-content: center;
+    align-items: baseline;
+    gap: 15px;
+    flex-wrap: wrap;
 }
 
 body[dir="rtl"] .section-header {
@@ -1190,4 +1201,78 @@ body[dir="rtl"] .hero-content {
 body[dir="rtl"] .hero-content .btn {
     margin-right: 0;
     margin-left: 15px;
+}
+
+/* ── Category Filter Tabs (Gallery Page) ────────────────────────────── */
+.category-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: center;
+    margin-bottom: 2rem;
+    padding: 0 0.5rem;
+}
+
+.cat-tab {
+    padding: 10px 22px;
+    font-size: 14px;
+    font-weight: 600;
+    border: 2px solid #E31E24;
+    border-radius: 30px;
+    color: #E31E24;
+    background: transparent;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.cat-tab:hover {
+    background: #E31E24;
+    color: #fff;
+}
+
+.cat-tab.active {
+    background: #E31E24;
+    color: #fff;
+    box-shadow: 0 4px 12px rgba(227, 30, 36, 0.3);
+}
+
+/* ── Services Grid: 3-column layout for 7 product cards ─────────────── */
+.services-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 30px;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+/* Center the last lonely card when 7 cards gives a row of 1 */
+.services-grid .service-card:last-child:nth-child(3n - 2) {
+    grid-column: 2;
+}
+
+@media (max-width: 1024px) {
+    .services-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .services-grid .service-card:last-child:nth-child(3n - 2) {
+        grid-column: auto;
+    }
+}
+
+@media (max-width: 600px) {
+    .services-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .category-tabs {
+        gap: 8px;
+    }
+
+    .cat-tab {
+        padding: 8px 14px;
+        font-size: 12px;
+    }
 }

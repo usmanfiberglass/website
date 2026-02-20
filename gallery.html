@@ -48,26 +48,16 @@
     </div>
 
     <section class="gallery-section">
+        <div id="categoryTabs" class="category-tabs"></div>
         <div class="gallery-controls">
             <div class="image-count" id="imageCount">Loading images...</div>
-            <button id="downloadAllBtn" class="btn btn-primary" onclick="downloadAllImages()" data-i18n="download_all">
-                Download All Images
-            </button>
         </div>
 
-        <div id="galleryLoading" class="loading">
-            <div class="loading-icon">⏳</div>
-            <div data-i18n="loading_gallery">Loading gallery...</div>
-        </div>
+
 
         <div class="gallery-grid" id="galleryGrid"></div>
 
-        <div class="load-more-container">
-            <button id="loadMoreBtn" class="btn btn-primary" onclick="loadMoreImages()" style="display: none;"
-                data-i18n="load_more">
-                Load More Images
-            </button>
-        </div>
+        <div id="scrollSentinel" style="height:1px;"></div>
     </section>
 
     <!-- Footer -->
@@ -133,245 +123,196 @@
 
     <!-- Script for Gallery Logic -->
     <script>
-        const CLOUDINARY_CONFIG = {
-            cloudName: 'dlu37dnxx',
-            folderPath: '',
-            totalImages: 1000,
-            imagePrefix: 'img-',
-            imageExtension: '.jpg',
-            imagesPerLoad: 24,
-            zeroPadding: 4,
-            cacheBuster: Date.now()
-        };
+        // ── Category definitions ──────────────────────────────────────────────
+        const CATEGORIES = [
+            { key: 'All', label: 'All', labelUr: 'تمام' },
+            { key: 'FiberGlassShades', label: 'Fiber Glass Shades', labelUr: 'فائبر گلاس شیڈز' },
+            { key: 'HouseDoor', label: 'House Door', labelUr: 'گھر کا دروازہ' },
+            { key: 'Kanopis', label: 'Kanopis', labelUr: 'کینوپیز' },
+            { key: 'OtherWorking', label: 'Other Working', labelUr: 'دیگر کام' },
+            { key: 'Roof', label: 'Roof', labelUr: 'چھت' },
+            { key: 'TensileShades', label: 'Tensile Shades', labelUr: 'ٹینسل شیڈز' },
+            { key: 'Windows', label: 'Windows', labelUr: 'کھڑکیاں' },
+        ];
 
-        let currentLoadedImages = 0;
-        let allImageURLs = [];
-        let successfullyLoadedCount = 0;
+        const CLOUD_NAME = 'dlu37dnxx';
+        const IMAGES_PER_LOAD = 24;      // show 24 at a time
+        const MAX_CONSECUTIVE_FAILS = 5; // stop probing after 5 consecutive misses
 
-        function padNumber(num, size) {
-            if (num < 10) return '00' + num;
-            else if (num < 100) return '00' + num;
-            else return '00' + num;
+        // discoveredImages  – all found images (background discovery)
+        // renderedCount     – how many are currently visible in the grid
+        let discoveredImages = [];
+        let renderedCount = 0;
+        let isDiscovering = false;       // true while background probe is running
+        let allDiscovered = false;       // true when probe has fully finished
+        let currentModalIndex = 0;
+        let activeCategory = 'All';
+        let scrollObserver = null;
+
+        // ── URL helpers ───────────────────────────────────────────────────────
+        function thumbURL(cat, num) {
+            return `https://res.cloudinary.com/${CLOUD_NAME}/image/upload/w_800,h_600,c_fill,f_auto/${cat}-${num}.jpg`;
+        }
+        function fullURL(cat, num) {
+            return `https://res.cloudinary.com/${CLOUD_NAME}/image/upload/w_1920,h_1080,c_limit,q_auto,f_auto/${cat}-${num}.jpg`;
         }
 
-        function getCloudinaryURL(imageNumber, transformation) {
-            const base = 'https://res.cloudinary.com/' + CLOUDINARY_CONFIG.cloudName + '/image/upload';
-            const paddedNum = padNumber(imageNumber);
-            const name = CLOUDINARY_CONFIG.imagePrefix + paddedNum + CLOUDINARY_CONFIG.imageExtension;
-            return base + '/' + transformation + '/' + name + '?v=' + CLOUDINARY_CONFIG.cacheBuster;
+        // ── Build category filter tabs ────────────────────────────────────────
+        function buildFilterTabs() {
+            const container = document.getElementById('categoryTabs');
+            if (!container) return;
+            const isUr = document.body.getAttribute('dir') === 'rtl';
+            container.innerHTML = '';
+            CATEGORIES.forEach(cat => {
+                const btn = document.createElement('button');
+                btn.className = 'cat-tab' + (cat.key === activeCategory ? ' active' : '');
+                btn.textContent = isUr ? cat.labelUr : cat.label;
+                btn.setAttribute('data-cat', cat.key);
+                btn.addEventListener('click', () => filterByCategory(cat.key));
+                container.appendChild(btn);
+            });
         }
 
-        function getThumbnailURL(num) {
-            return getCloudinaryURL(num, 'w_800,h_600,c_fill,f_auto');
+        // ── Render the next batch of already-discovered images ────────────────
+        function renderNextBatch() {
+            const grid = document.getElementById('galleryGrid');
+            const end = Math.min(renderedCount + IMAGES_PER_LOAD, discoveredImages.length);
+            for (let i = renderedCount; i < end; i++) {
+                const imgData = discoveredImages[i];
+                const div = document.createElement('div');
+                div.className = 'gallery-item';
+                div.setAttribute('data-index', i);
+                div.innerHTML = `<img src="${imgData.thumb}" alt="${imgData.cat} ${imgData.num}" loading="lazy">
+                    <div class="gallery-item-title">${imgData.cat} ${imgData.num}</div>`;
+                div.addEventListener('click', () => openModal(i));
+                grid.appendChild(div);
+            }
+            renderedCount = end;
+            updateImageCount();
         }
 
-        function getFullSizeURL(num) {
-            return getCloudinaryURL(num, 'w_1920,h_1080,c_limit,q_auto,f_auto');
+        // ── Infinite scroll via IntersectionObserver ──────────────────────────
+        function setupScrollObserver() {
+            if (scrollObserver) scrollObserver.disconnect();
+            const sentinel = document.getElementById('scrollSentinel');
+            scrollObserver = new IntersectionObserver(entries => {
+                if (!entries[0].isIntersecting) return;
+                // More already discovered but not yet rendered?
+                if (renderedCount < discoveredImages.length) {
+                    renderNextBatch();
+                }
+                // If discovery finished and everything is rendered, stop observing
+                if (allDiscovered && renderedCount >= discoveredImages.length) {
+                    scrollObserver.disconnect();
+                }
+            }, { rootMargin: '200px' });
+            scrollObserver.observe(sentinel);
+        }
+
+        // ── Background discovery of all images in the selected categories ─────
+        function startDiscovery(catsToLoad) {
+            isDiscovering = true;
+            allDiscovered = false;
+            discoverCatsSequentially(catsToLoad, 0);
+        }
+
+        function discoverCatsSequentially(cats, index) {
+            if (index >= cats.length) {
+                isDiscovering = false;
+                allDiscovered = true;
+                // Render any remaining images that arrived after first batch
+                if (renderedCount < discoveredImages.length) renderNextBatch();
+                return;
+            }
+            probeCategory(cats[index], 1, 0, () => {
+                discoverCatsSequentially(cats, index + 1);
+            });
+        }
+
+        function probeCategory(cat, num, consecutiveFails, done) {
+            if (consecutiveFails >= MAX_CONSECUTIVE_FAILS) { done(); return; }
+            const probe = new Image();
+            probe.onload = function () {
+                discoveredImages.push({ thumb: thumbURL(cat, num), full: fullURL(cat, num), cat, num });
+                // If we haven't filled the first page yet, render immediately
+                if (renderedCount < IMAGES_PER_LOAD) renderNextBatch();
+                probeCategory(cat, num + 1, 0, done);
+            };
+            probe.onerror = function () {
+                probeCategory(cat, num + 1, consecutiveFails + 1, done);
+            };
+            probe.src = `https://res.cloudinary.com/${CLOUD_NAME}/image/upload/w_10,h_10,c_fill,f_auto/${cat}-${num}.jpg`;
+        }
+
+        // ── Filter by category ────────────────────────────────────────────────
+        function filterByCategory(cat) {
+            activeCategory = cat;
+
+            // Stop previous discovery if still running
+            isDiscovering = false;
+            allDiscovered = false;
+            discoveredImages = [];
+            renderedCount = 0;
+
+            // Update active tab styles
+            document.querySelectorAll('.cat-tab').forEach(btn => {
+                btn.classList.toggle('active', btn.getAttribute('data-cat') === cat);
+            });
+
+            // Clear grid
+            document.getElementById('galleryGrid').innerHTML = '';
+            updateImageCount();
+
+            // Setup scroll observer before discovery begins
+            setupScrollObserver();
+
+            const catsToLoad = cat === 'All'
+                ? CATEGORIES.filter(c => c.key !== 'All').map(c => c.key)
+                : [cat];
+
+            startDiscovery(catsToLoad);
         }
 
         function updateImageCount() {
-            const visibleItems = document.querySelectorAll('.gallery-item:not([style*="display: none"])');
             const isUr = document.body.getAttribute('dir') === 'rtl';
-            if (isUr) {
-                document.getElementById('imageCount').textContent =
-                    translations.ur.showing_images + ' ' + visibleItems.length;
-            } else {
-                document.getElementById('imageCount').textContent =
-                    'Showing ' + visibleItems.length + ' images';
+            const el = document.getElementById('imageCount');
+            if (el) {
+                el.textContent = isUr
+                    ? (typeof translations !== 'undefined' ? translations.ur.showing_images : 'تصاویر دکھائی جا رہی ہیں') + ' ' + renderedCount
+                    : 'Showing ' + renderedCount + ' images';
             }
         }
 
-        function createGalleryItem(num, idx) {
-            const isUr = document.body.getAttribute('dir') === 'rtl';
-            const projectText = isUr ? translations.ur.project : 'Project';
-            return '<div class="gallery-item" onclick="openModal(' + idx + ')" data-image-number="' + num + '" data-index="' + idx + '">' +
-                '<img src="' + getThumbnailURL(num) + '" alt="' + projectText + ' ' + num + '" loading="lazy" onerror="handleImageError(this, ' + num + ')">' +
-                '<div class="gallery-item-title">' + projectText + ' ' + num + '</div></div>';
-        }
-
-        function handleImageError(img, num) {
-            img.parentElement.style.display = 'none';
-        }
-
-        function loadMoreImages() {
-            const grid = document.getElementById('galleryGrid');
-            const btn = document.getElementById('loadMoreBtn');
-            const loading = document.getElementById('galleryLoading');
-
-            const start = currentLoadedImages;
-            const end = Math.min(currentLoadedImages + CLOUDINARY_CONFIG.imagesPerLoad, CLOUDINARY_CONFIG.totalImages);
-
-            for (let i = start; i < end; i++) {
-                const num = i + 1;
-                allImageURLs.push(num);
-                grid.innerHTML += createGalleryItem(num, i);
-            }
-
-            currentLoadedImages = end;
-
-            if (loading) loading.style.display = 'none';
-            setTimeout(updateImageCount, 500);
-
-            if (currentLoadedImages >= CLOUDINARY_CONFIG.totalImages) {
-                btn.style.display = 'none';
-            } else {
-                btn.style.display = 'inline-block';
-            }
-        }
-
-        window.addEventListener('DOMContentLoaded', function () {
-            loadMoreImages();
-        });
-
-        let currentModalIndex = 0;
-
+        // ── Modal ─────────────────────────────────────────────────────────────
         function openModal(index) {
             currentModalIndex = index;
-            const num = allImageURLs[currentModalIndex];
             showModalImage();
-            updateDownloadButton();
-            const modal = document.getElementById('modal');
-            modal.classList.add('active');
+            document.getElementById('modal').classList.add('active');
             document.body.style.overflow = 'hidden';
         }
 
         function showModalImage() {
+            const imgData = discoveredImages[currentModalIndex];
+            if (!imgData) return;
             const content = document.getElementById('modalContent');
-            const num = allImageURLs[currentModalIndex];
-            const isUr = document.body.getAttribute('dir') === 'rtl';
-            const projectText = isUr ? translations.ur.project : 'Project';
-            content.innerHTML = '<img src="' + getFullSizeURL(num) + '" alt="' + projectText + ' ' + num + '">';
+            content.innerHTML = `<img src="${imgData.full}" alt="${imgData.cat} ${imgData.num}">`;
             updateDownloadButton();
         }
 
         function updateDownloadButton() {
-            const num = allImageURLs[currentModalIndex];
+            const imgData = discoveredImages[currentModalIndex];
+            if (!imgData) return;
             const downloadBtn = document.getElementById('downloadBtn');
-            const paddedNum = padNumber(num);
-            const filename = CLOUDINARY_CONFIG.imagePrefix + paddedNum + CLOUDINARY_CONFIG.imageExtension;
-            downloadBtn.setAttribute('data-url', getFullSizeURL(num));
-            downloadBtn.setAttribute('data-filename', filename);
-        }
-
-        function downloadImage(event) {
-            event.stopPropagation();
-            const downloadBtn = document.getElementById('downloadBtn');
-            const url = downloadBtn.getAttribute('data-url');
-            const filename = downloadBtn.getAttribute('data-filename');
-
-            downloadBtn.innerHTML = '<span>⏳</span><span>Downloading...</span>';
-            downloadBtn.disabled = true;
-
-            fetch(url)
-                .then(response => response.blob())
-                .then(blob => {
-                    const blobUrl = window.URL.createObjectURL(blob);
-                    const link = document.createElement('a');
-                    link.href = blobUrl;
-                    link.download = filename;
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
-                    window.URL.revokeObjectURL(blobUrl);
-                    downloadBtn.innerHTML = '<span>⬇</span><span>Download</span>';
-                    downloadBtn.disabled = false;
-                })
-                .catch(error => {
-                    console.error('Download failed:', error);
-                    window.open(url, '_blank');
-                    downloadBtn.innerHTML = '<span>⬇</span><span>Download</span>';
-                    downloadBtn.disabled = false;
-                });
-        }
-
-        function downloadAllImages() {
-            const downloadAllBtn = document.getElementById('downloadAllBtn');
-            const maxImages = CLOUDINARY_CONFIG.totalImages;
-
-            if (!confirm('Download all available images from the gallery? This will automatically detect how many images exist.')) {
-                return;
-            }
-
-            const originalText = downloadAllBtn.innerHTML;
-            downloadAllBtn.innerHTML = 'Scanning and downloading...';
-            downloadAllBtn.disabled = true;
-
-            let downloaded = 0;
-            let successful = 0;
-            let failed = 0;
-            let consecutiveFails = 0;
-            let currentImage = 1;
-            const maxConsecutiveFails = 10;
-
-            function downloadNext() {
-                if (currentImage > maxImages || consecutiveFails >= maxConsecutiveFails) {
-                    downloadAllBtn.innerHTML = originalText;
-                    downloadAllBtn.disabled = false;
-
-                    if (consecutiveFails >= maxConsecutiveFails) {
-                        alert('Download complete!\nSuccessfully downloaded: ' + successful + ' images\nStopped after finding ' + maxConsecutiveFails + ' consecutive missing images.');
-                    } else {
-                        alert('Download complete!\nSuccessfully downloaded: ' + successful + ' images\nFailed/Not found: ' + failed);
-                    }
-                    return;
-                }
-
-                const imageNumber = currentImage;
-                const paddedNum = padNumber(imageNumber);
-                const filename = CLOUDINARY_CONFIG.imagePrefix + paddedNum + CLOUDINARY_CONFIG.imageExtension;
-                const url = getFullSizeURL(imageNumber);
-
-                downloadAllBtn.innerHTML = 'Downloading... ' + successful + ' images found (checking #' + currentImage + ')';
-
-                fetch(url)
-                    .then(response => {
-                        if (!response.ok) throw new Error('Image not found');
-                        return response.blob();
-                    })
-                    .then(blob => {
-                        const blobUrl = window.URL.createObjectURL(blob);
-                        const link = document.createElement('a');
-                        link.href = blobUrl;
-                        link.download = filename;
-                        document.body.appendChild(link);
-                        link.click();
-                        document.body.removeChild(link);
-                        window.URL.revokeObjectURL(blobUrl);
-
-                        successful++;
-                        consecutiveFails = 0;
-                        currentImage++;
-                        setTimeout(downloadNext, 300);
-                    })
-                    .catch(error => {
-                        failed++;
-                        consecutiveFails++;
-                        currentImage++;
-                        setTimeout(downloadNext, 100);
-                    });
-            }
-            downloadNext();
+            downloadBtn.setAttribute('data-url', imgData.full);
+            downloadBtn.setAttribute('data-filename', `${imgData.cat}-${imgData.num}.jpg`);
         }
 
         function navigateModal(direction, event) {
-            event.stopPropagation();
+            if (event) event.stopPropagation();
             currentModalIndex += direction;
-            if (currentModalIndex < 0) currentModalIndex = allImageURLs.length - 1;
-            else if (currentModalIndex >= allImageURLs.length) currentModalIndex = 0;
-
-            let attempts = 0;
-            while (attempts < allImageURLs.length) {
-                const num = allImageURLs[currentModalIndex];
-                const item = document.querySelector('[data-image-number="' + num + '"]');
-                if (item && item.style.display !== 'none') {
-                    showModalImage();
-                    return;
-                }
-                currentModalIndex += direction;
-                if (currentModalIndex < 0) currentModalIndex = allImageURLs.length - 1;
-                else if (currentModalIndex >= allImageURLs.length) currentModalIndex = 0;
-                attempts++;
-            }
+            if (currentModalIndex < 0) currentModalIndex = discoveredImages.length - 1;
+            else if (currentModalIndex >= discoveredImages.length) currentModalIndex = 0;
+            showModalImage();
         }
 
         function closeModal(event) {
@@ -380,48 +321,60 @@
             document.body.style.overflow = 'auto';
         }
 
+        function downloadImage(event) {
+            event.stopPropagation();
+            const downloadBtn = document.getElementById('downloadBtn');
+            const url = downloadBtn.getAttribute('data-url');
+            const filename = downloadBtn.getAttribute('data-filename');
+            downloadBtn.innerHTML = '<span>⏳</span><span>Downloading...</span>';
+            downloadBtn.disabled = true;
+            fetch(url)
+                .then(r => r.blob())
+                .then(blob => {
+                    const blobUrl = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.href = blobUrl;
+                    link.download = filename;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(blobUrl);
+                    downloadBtn.innerHTML = '<span>⬇</span><span>Download</span>';
+                    downloadBtn.disabled = false;
+                })
+                .catch(() => {
+                    window.open(url, '_blank');
+                    downloadBtn.innerHTML = '<span>⬇</span><span>Download</span>';
+                    downloadBtn.disabled = false;
+                });
+        }
+
+        // ── Modal events ──────────────────────────────────────────────────────
         document.getElementById('modal').addEventListener('click', function (e) {
             if (e.target === this) closeModal();
         });
-
         document.addEventListener('keydown', function (e) {
             const modal = document.getElementById('modal');
             if (modal.classList.contains('active')) {
                 if (e.key === 'Escape') closeModal();
-                if (e.key === 'ArrowLeft') navigateModal(-1, e);
-                if (e.key === 'ArrowRight') navigateModal(1, e);
+                if (e.key === 'ArrowLeft') navigateModal(-1, null);
+                if (e.key === 'ArrowRight') navigateModal(1, null);
             }
         });
 
-        // Swipe Navigation Logic
+        // Swipe
         let touchStartX = 0;
-        let touchEndX = 0;
-        const modalElement = document.getElementById('modal');
-
-        modalElement.addEventListener('touchstart', function (e) {
+        document.getElementById('modal').addEventListener('touchstart', e => {
             touchStartX = e.changedTouches[0].screenX;
         }, { passive: true });
-
-        modalElement.addEventListener('touchend', function (e) {
-            touchEndX = e.changedTouches[0].screenX;
-            handleGesture(e);
+        document.getElementById('modal').addEventListener('touchend', e => {
+            const diff = e.changedTouches[0].screenX - touchStartX;
+            if (Math.abs(diff) > 50) navigateModal(diff < 0 ? 1 : -1, null);
         }, { passive: true });
 
-        function handleGesture(e) {
-            if (touchEndX < touchStartX - 50) {
-                // Swipe Left -> Next Image
-                navigateModal(1, e);
-            }
-            if (touchEndX > touchStartX + 50) {
-                // Swipe Right -> Previous Image
-                navigateModal(-1, e);
-            }
-        }
-
-        // Mobile Menu Toggle Logic from common script
+        // ── Mobile menu & sticky header ───────────────────────────────────────
         const mobileToggle = document.querySelector('.mobile-toggle');
         const navLinks = document.querySelector('.nav-links');
-
         if (mobileToggle) {
             mobileToggle.addEventListener('click', () => {
                 navLinks.style.display = navLinks.style.display === 'flex' ? 'none' : 'flex';
@@ -436,13 +389,25 @@
                 }
             });
         }
-
-        // Sticky Header Logic
         window.addEventListener('scroll', function () {
             const header = document.querySelector('.header');
-            if (header) {
-                header.classList.toggle('sticky', window.scrollY > 0);
-            }
+            if (header) header.classList.toggle('sticky', window.scrollY > 0);
+        });
+
+        // ── Init ──────────────────────────────────────────────────────────────
+        window.addEventListener('DOMContentLoaded', function () {
+            const urlParams = new URLSearchParams(window.location.search);
+            const catParam = urlParams.get('cat');
+            const validCats = CATEGORIES.map(c => c.key);
+            if (catParam && validCats.includes(catParam)) activeCategory = catParam;
+            buildFilterTabs();
+            filterByCategory(activeCategory);
+
+            // Listen for language changes to update tabs
+            document.addEventListener('languageChanged', () => {
+                buildFilterTabs();
+                updateImageCount();
+            });
         });
     </script>
 </body>
